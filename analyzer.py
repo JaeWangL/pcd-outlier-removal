@@ -6,11 +6,11 @@ from loader.las_loader import LasLoader
 from removal.outlier_removal import OutlierRemoval
 
 # Load the reference dataframe once as it remains constant
-df_reference = CsvLoader('./__reference__/reference.csv').load_to_dataframe()
+df_reference = CsvLoader('__reference__/reference.csv').load_to_dataframe()
 
 # Directory paths
-raw_data_dir = './__rawdata__'
-target_data_dir = './__testdata__'
+raw_data_dir = '__rawdata__1'
+target_data_dir = '__testdata__1'
 
 # Prepare a list to store results
 results = []
@@ -28,7 +28,7 @@ for filename in os.listdir(raw_data_dir):
             df_target = LasLoader(target_file_path).load_to_dataframe()
 
             # Process and estimate
-            estimator = PCDEstimator(df_reference, df_raw, OutlierRemoval(df_raw).main(), df_target)
+            estimator = PCDEstimator(df_reference, df_raw, OutlierRemoval(df_raw).main(True), df_target)
             mean_diff_raw, mean_diff_mine, mean_diff_target, better_target = estimator.main()
 
             # Append the results for each file to the results list

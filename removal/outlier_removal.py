@@ -111,9 +111,10 @@ class OutlierRemoval:
             pd.DataFrame: The DataFrame after removing isolated outliers.
         """
         std_ratio = self._estimate_std_ratio()
+        std_ratio += 1.0
         # nb_neighbors specifies how many nearest neighbors are used in the mean distance calculation.
         # You might want to adjust this based on your data's density.
-        nb_neighbors = max(10, self.k)  # This is just an example value
+        nb_neighbors = 20# max(10, self.k)  # This is just an example value
 
         # Applying Statistical Outlier Removal
         cl, ind = self.pcd.remove_statistical_outlier(nb_neighbors=nb_neighbors,

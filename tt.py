@@ -27,7 +27,7 @@ def display_point_cloud(point_cloud):
 
 # Main function
 if __name__ == "__main__":
-    las_file_path = '__rawdata__/Seahawk_231015_225544_00_D.las'  # Change this to the path of your LAS file
+    las_file_path = '__rawdata__2/Seahawk_231015_225544_00_D.las'  # Change this to the path of your LAS file
     original_point_cloud = load_las_as_point_cloud(las_file_path)
     filtered_point_cloud = original_point_cloud
     filtered_point_cloud = apply_sparse_outlier_removal(original_point_cloud)

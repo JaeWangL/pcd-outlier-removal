@@ -34,3 +34,26 @@ class LasLoader:
         df = pd.DataFrame(data)
 
         return df
+
+    def save_to_las(self, output_filepath: str) -> None:
+        """
+        Saves the DataFrame to a LAS file.
+
+        The DataFrame must contain columns 'E', 'N', and 'h', corresponding to the easting, northing, and height.
+        """
+        header = laspy.LasHeader(version="1.2", point_format=3)
+        header.x_scale = 0.01
+        header.y_scale = 0.01
+        header.z_scale = 0.01
+
+        # Create a new LAS file with the given header
+        with laspy.create(header, output_filepath) as las:
+            # Ensure the DataFrame columns are in the correct format
+            E = self.dataframe['E'].to_numpy()
+            N = self.dataframe['N'].to_numpy()
+            h = self.dataframe['h'].to_numpy()
+
+            # Assigning coordinates to points
+            las.x = E
+            las.y = N
+            las.z = h

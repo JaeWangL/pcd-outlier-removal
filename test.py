@@ -4,7 +4,7 @@ import open3d as o3d
 from loader.las_loader import LasLoader
 
 # Directory containing the raw .las files
-raw_data_dir = './__rawdata__'
+raw_data_dir = '__rawdata__2'
 all_point_clouds = []
 
 # Iterate through all files in the directory

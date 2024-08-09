@@ -9,7 +9,7 @@ from removal.outlier_removal import OutlierRemoval
 df_reference = CsvLoader('__reference__/reference.csv').load_to_dataframe()
 
 # Directory paths
-raw_data_dir = '__rawdata__1'
+raw_data_dir = '__rawdata__'
 target_data_dir = '__testdata__1'
 
 # Prepare a list to store results

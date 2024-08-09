@@ -6,7 +6,7 @@ from loader.las_loader import LasLoader
 from removal.outlier_removal import OutlierRemoval
 
 # Directory paths
-raw_data_dir = '__rawdata__1'
+raw_data_dir = '__rawdata__'
 
 # Prepare a list to store results
 results = []

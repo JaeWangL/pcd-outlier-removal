@@ -1,8 +1,11 @@
 import os
-from loader.las_loader import LasLoader
-from removal.outlier_removal import OutlierRemoval
+
 import laspy
 import numpy as np
+
+from loader.las_loader import LasLoader
+from removal.outlier_removal import OutlierRemoval
+
 
 def save_dataframe_to_las(dataframe, output_filepath):
     # 1. Create a new header
@@ -18,6 +21,7 @@ def save_dataframe_to_las(dataframe, output_filepath):
         point_record.z = dataframe['h']
 
         writer.write_points(point_record)
+
 
 raw_data_dir = '../__rawdata__2'
 filtered_dir = os.path.join(raw_data_dir, 'filtered')

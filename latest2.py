@@ -88,15 +88,34 @@ class AutoEncoder(nn.Module):
     def __init__(self, input_dim=3, representation_dim=64):
         super(AutoEncoder, self).__init__()
         self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 32),
-            nn.ReLU(),
-            nn.Linear(32, representation_dim),
-            nn.ReLU()
+            nn.Linear(input_dim, 128),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(128),
+            nn.Linear(128, 64),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(64),
+            nn.Linear(64, 32),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(32),
+            nn.Linear(32, 16),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(16),
+            nn.Linear(16, 8)
         )
         self.decoder = nn.Sequential(
-            nn.Linear(representation_dim, 32),
-            nn.ReLU(),
-            nn.Linear(32, input_dim)
+            nn.Linear(8, 16),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(16),
+            nn.Linear(16, 32),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(32),
+            nn.Linear(32, 64),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(64),
+            nn.Linear(64, 128),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(128),
+            nn.Linear(128, input_dim)
         )
 
     def forward(self, x):
@@ -106,7 +125,7 @@ class AutoEncoder(nn.Module):
 
 
 def main():
-    filename = "Seahawk_231015_230607_00_D.las"
+    filename = "Seahawk_231015_223008_00_D.las"
     loader = LasLoader(f"./__rawdata__/{filename}")
     df = loader.load_to_dataframe()
 
@@ -132,9 +151,9 @@ def main():
     df_filtered = df[inlier_mask]
 
     # Apply LOF on the 3D points
-    pcd_3d = df_filtered[['E', 'N', 'h']]
-    lof_mask_3d = remove_outliers_lof(pcd_3d, contamination=0.01, n_neighbors=20)
-    df_filtered = df_filtered[lof_mask_3d]
+    # pcd_3d = df_filtered[['E', 'N', 'h']]
+    # lof_mask_3d = remove_outliers_lof(pcd_3d, contamination=0.01, n_neighbors=20)
+    # df_filtered = df_filtered[lof_mask_3d]
 
     # Now apply SRR after LOF
     print("Applying SRR after LOF...")

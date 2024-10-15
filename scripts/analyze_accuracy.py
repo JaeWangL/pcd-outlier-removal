@@ -1,9 +1,7 @@
 import logging
 
-from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
+from scipy.interpolate import NearestNDInterpolator
 import matplotlib.pyplot as plt
-from scipy.spatial import ConvexHull
-from shapely.geometry import Polygon, Point
 
 from src.loader.las_loader import LasLoader
 import numpy as np
@@ -41,60 +39,21 @@ def main():
     raw_D_df = preprocess(raw_D_df)
     cleaned_df = preprocess(cleaned_df)
 
-    # Filter cleaned data to include only points where h is between -5 and 5
-    z_min, z_max = -5, 5
-    cleaned_filtered_df = cleaned_df[(cleaned_df['h'] >= z_min) & (cleaned_df['h'] <= z_max)]
-
-    # Check if there are enough points after filtering
-    if cleaned_filtered_df.empty:
-        logger.error(f"No points in cleaned data with z between {z_min} and {z_max}")
-        return
-
-    # Compute the convex hull of the filtered cleaned data points
-    points = cleaned_filtered_df[['E', 'N']].values
-
-    # If there are not enough points for a convex hull, handle accordingly
-    if len(points) < 3:
-        logger.error("Not enough points to compute a convex hull.")
-        return
-
-    hull = ConvexHull(points)
-    hull_points = points[hull.vertices]
-
-    # Create a shapely polygon of the convex hull
-    polygon = Polygon(hull_points)
-
-    # Generate random points within the convex hull
-    min_x, min_y, max_x, max_y = polygon.bounds
+    # Set the specified ranges for Easting (E) and Northing (N)
+    min_x, max_x = 267000, 268000
+    min_y, max_y = 4050000, 4052000
 
     num_random_points = 10000  # Adjust as needed
-    random_points = []
 
-    logger.info(f"Generating random points within the area where cleaned data z is between {z_min} and {z_max}")
+    logger.info(f"Generating {num_random_points} random points within specified E and N ranges")
 
-    # Generate random points within the bounding rectangle and select those inside the polygon
-    attempts = 0
-    max_attempts = num_random_points * 10  # To prevent infinite loop
-    while len(random_points) < num_random_points and attempts < max_attempts:
-        rand_x = np.random.uniform(min_x, max_x)
-        rand_y = np.random.uniform(min_y, max_y)
-        random_point = Point(rand_x, rand_y)
-        attempts += 1
-        if polygon.contains(random_point):
-            # Interpolate z value at this point from the cleaned data
-            # We need an interpolator for the cleaned data
-            cleaned_interp_point = NearestNDInterpolator(cleaned_filtered_df[['E', 'N']].values,
-                                                         cleaned_filtered_df['h'].values)
-            z_value = cleaned_interp_point([rand_x, rand_y])[0]
-            if np.isfinite(z_value) and z_min <= z_value <= z_max:
-                random_points.append((rand_x, rand_y))
+    # Generate random points within the specified ranges
+    random_points = np.column_stack((
+        np.random.uniform(min_x, max_x, num_random_points),
+        np.random.uniform(min_y, max_y, num_random_points)
+    ))
 
-    if len(random_points) < num_random_points:
-        logger.warning(f"Only generated {len(random_points)} random points after {attempts} attempts.")
-
-    random_points = np.array(random_points)
-
-    logger.info(f"Generated {len(random_points)} random points within the specified z range.")
+    logger.info(f"Generated {len(random_points)} random points within specified ranges")
 
     # Prepare datasets for interpolation
     ref_points = reference_df[['E', 'N']].values

@@ -1,8 +1,8 @@
 import logging
 
-from scipy.interpolate import LinearNDInterpolator
+from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
 import matplotlib.pyplot as plt
-import pandas as pd
+from shapely.geometry import Polygon, Point
 
 from src.loader.las_loader import LasLoader
 import numpy as np
@@ -34,71 +34,139 @@ def main():
         df = df.dropna(subset=['E', 'N', 'h'])
         # Remove duplicate points based on E and N
         df = df.drop_duplicates(subset=['E', 'N'])
+        # Optionally, remove points where h == 0 if required
+        # df = df[df['h'] != 0]
         return df
 
     reference_df = preprocess(reference_df)
     raw_D_df = preprocess(raw_D_df)
     cleaned_df = preprocess(cleaned_df)
 
-    # Define grid parameters based on the extent of the cleaned data
-    grid_size = 10  # Adjust grid size as needed (in the same units as E and N)
-    xmin, xmax = cleaned_df['E'].min(), cleaned_df['E'].max()
-    ymin, ymax = cleaned_df['N'].min(), cleaned_df['N'].max()
-    x_edges = np.arange(xmin, xmax + grid_size, grid_size)
-    y_edges = np.arange(ymin, ymax + grid_size, grid_size)
-    logger.info(f"Generated grid with cell size {grid_size} units.")
+    # Compute convex hull of the cleaned data points
+    from scipy.spatial import ConvexHull
 
-    # Function to compute mean heights within each grid cell
-    def compute_grid_means(df, x_edges, y_edges):
-        # Assign grid cell indices to each point
-        df['x_bin'] = np.digitize(df['E'], x_edges) - 1
-        df['y_bin'] = np.digitize(df['N'], y_edges) - 1
-        # Group by grid cells and compute mean height
-        grid_mean = df.groupby(['x_bin', 'y_bin'], as_index=False)['h'].mean()
-        return grid_mean
+    points = cleaned_df[['E', 'N']].values
+    hull = ConvexHull(points)
+    hull_points = points[hull.vertices]
 
-    # Compute mean heights for each dataset
-    reference_grid = compute_grid_means(reference_df, x_edges, y_edges)
-    raw_D_grid = compute_grid_means(raw_D_df, x_edges, y_edges)
-    cleaned_grid = compute_grid_means(cleaned_df, x_edges, y_edges)
+    # Create a shapely polygon of the convex hull
+    polygon = Polygon(hull_points)
 
-    # Merge datasets on grid cells to compare heights
-    df_ref_raw_D = pd.merge(reference_grid, raw_D_grid, on=['x_bin', 'y_bin'], suffixes=('_ref', '_raw_D'))
-    df_ref_cleaned = pd.merge(reference_grid, cleaned_grid, on=['x_bin', 'y_bin'], suffixes=('_ref', '_cleaned'))
+    # Generate random points within the convex hull
+    min_x, min_y, max_x, max_y = polygon.bounds
 
-    # Compute height differences
-    df_ref_raw_D['diff'] = df_ref_raw_D['h_ref'] - df_ref_raw_D['h_raw_D']
-    df_ref_cleaned['diff'] = df_ref_cleaned['h_ref'] - df_ref_cleaned['h_cleaned']
+    num_random_points = 10000  # Adjust as needed
+    random_points = []
 
-    # Calculate grid cell centers for plotting
-    df_ref_raw_D['x_center'] = x_edges[df_ref_raw_D['x_bin']] + grid_size / 2
-    df_ref_raw_D['y_center'] = y_edges[df_ref_raw_D['y_bin']] + grid_size / 2
+    logger.info("Generating random points within convex hull")
 
-    df_ref_cleaned['x_center'] = x_edges[df_ref_cleaned['x_bin']] + grid_size / 2
-    df_ref_cleaned['y_center'] = y_edges[df_ref_cleaned['y_bin']] + grid_size / 2
+    # Generate random points within the bounding rectangle and select those inside the polygon
+    while len(random_points) < num_random_points:
+        random_point = Point(np.random.uniform(min_x, max_x),
+                             np.random.uniform(min_y, max_y))
+        if polygon.contains(random_point):
+            random_points.append((random_point.x, random_point.y))
 
-    logger.info("Computed differences and grid cell centers.")
+    random_points = np.array(random_points)
 
-    # Visualization
+    logger.info(f"Generated {len(random_points)} random points within convex hull")
+
+    # Prepare datasets for interpolation
+    ref_points = reference_df[['E', 'N']].values
+    ref_z = reference_df['h'].values
+    rawD_points = raw_D_df[['E', 'N']].values
+    rawD_z = raw_D_df['h'].values
+    cleaned_points = cleaned_df[['E', 'N']].values
+    cleaned_z = cleaned_df['h'].values
+
+    # For large datasets, downsample the data to reduce computation time
+    # Adjust the sampling step as necessary
+    sample_step = 10  # Increase if still too large
+    ref_points_sampled = ref_points[::sample_step]
+    ref_z_sampled = ref_z[::sample_step]
+    rawD_points_sampled = rawD_points[::sample_step]
+    rawD_z_sampled = rawD_z[::sample_step]
+    cleaned_points_sampled = cleaned_points[::sample_step]
+    cleaned_z_sampled = cleaned_z[::sample_step]
+
+    # Create interpolators using NearestNDInterpolator
+    logger.info("Creating interpolators")
+
+    try:
+        ref_interp = NearestNDInterpolator(ref_points_sampled, ref_z_sampled)
+        rawD_interp = NearestNDInterpolator(rawD_points_sampled, rawD_z_sampled)
+        cleaned_interp = NearestNDInterpolator(cleaned_points_sampled, cleaned_z_sampled)
+    except Exception as e:
+        logger.error(f"Error creating interpolators: {e}")
+        return
+
+    # Interpolate z values at the random points
+    logger.info("Interpolating z values at random points")
+
+    z_ref = ref_interp(random_points)
+    z_rawD = rawD_interp(random_points)
+    z_cleaned = cleaned_interp(random_points)
+
+    # Compute differences where interpolated values are valid (not NaN)
+    valid_mask_ref_rawD = np.isfinite(z_ref) & np.isfinite(z_rawD)
+    diff_rawD = z_ref[valid_mask_ref_rawD] - z_rawD[valid_mask_ref_rawD]
+    valid_points_rawD = random_points[valid_mask_ref_rawD]
+
+    valid_mask_ref_cleaned = np.isfinite(z_ref) & np.isfinite(z_cleaned)
+    diff_cleaned = z_ref[valid_mask_ref_cleaned] - z_cleaned[valid_mask_ref_cleaned]
+    valid_points_cleaned = random_points[valid_mask_ref_cleaned]
+
+    # Compute RMSE and other statistics
+    def compute_statistics(differences, label):
+        rmse = np.sqrt(np.mean(differences ** 2))
+        me = np.mean(differences)
+        sd = np.std(differences)
+        count = len(differences)
+        logger.info(f"{label} - RMSE: {rmse:.3f}, ME: {me:.3f}, SD: {sd:.3f}, Count: {count}")
+        print(f"{label} - RMSE: {rmse:.3f}, ME: {me:.3f}, SD: {sd:.3f}, Count: {count}")
+        return rmse, me, sd
+
+    rmse_rawD, me_rawD, sd_rawD = compute_statistics(diff_rawD, "Reference vs Raw_D")
+    rmse_cleaned, me_cleaned, sd_cleaned = compute_statistics(diff_cleaned, "Reference vs Cleaned")
+
+    # Visualize the differences
     plt.figure(figsize=(14, 7))
 
     plt.subplot(1, 2, 1)
-    sc1 = plt.scatter(df_ref_raw_D['x_center'], df_ref_raw_D['y_center'],
-                      c=df_ref_raw_D['diff'], s=10, cmap='viridis', marker='s')
+    sc1 = plt.scatter(valid_points_rawD[:, 0], valid_points_rawD[:, 1],
+                      c=diff_rawD, s=10, cmap='RdYlBu_r', marker='.')
     plt.colorbar(sc1, label='Height Difference (m)')
-    plt.title('Difference between Reference and Raw_D Data')
+    plt.title(f'Difference between Reference and Raw_D Data\nRMSE: {rmse_rawD:.3f} m')
     plt.xlabel('Easting (E)')
     plt.ylabel('Northing (N)')
     plt.axis('equal')
 
     plt.subplot(1, 2, 2)
-    sc2 = plt.scatter(df_ref_cleaned['x_center'], df_ref_cleaned['y_center'],
-                      c=df_ref_cleaned['diff'], s=10, cmap='viridis', marker='s')
+    sc2 = plt.scatter(valid_points_cleaned[:, 0], valid_points_cleaned[:, 1],
+                      c=diff_cleaned, s=10, cmap='RdYlBu_r', marker='.')
     plt.colorbar(sc2, label='Height Difference (m)')
-    plt.title('Difference between Reference and Cleaned Data')
+    plt.title(f'Difference between Reference and Cleaned Data\nRMSE: {rmse_cleaned:.3f} m')
     plt.xlabel('Easting (E)')
     plt.ylabel('Northing (N)')
     plt.axis('equal')
+
+    plt.tight_layout()
+    plt.show()
+
+    # Histograms
+    plt.figure(figsize=(12, 5))
+
+    plt.subplot(1, 2, 1)
+    plt.hist(diff_rawD, bins=50, color='skyblue', edgecolor='black')
+    plt.title('Histogram of Height Differences\nReference vs Raw_D')
+    plt.xlabel('Height Difference (m)')
+    plt.ylabel('Frequency')
+
+    plt.subplot(1, 2, 2)
+    plt.hist(diff_cleaned, bins=50, color='salmon', edgecolor='black')
+    plt.title('Histogram of Height Differences\nReference vs Cleaned')
+    plt.xlabel('Height Difference (m)')
+    plt.ylabel('Frequency')
 
     plt.tight_layout()
     plt.show()

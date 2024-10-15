@@ -2,6 +2,7 @@ import logging
 
 from scipy.interpolate import LinearNDInterpolator
 import matplotlib.pyplot as plt
+import pandas as pd
 
 from src.loader.las_loader import LasLoader
 import numpy as np
@@ -27,65 +28,63 @@ def main():
     raw_D_df = raw_D_loader.load_to_dataframe()
     cleaned_df = cleaned_loader.load_to_dataframe()
 
-    # Now create a random grid based on the extent of "cleaned_merged_output.las"
-    # We can get min and max of E and N (which are x and y)
+    # Preprocess data
+    def preprocess(df):
+        # Remove NaNs
+        df = df.dropna(subset=['E', 'N', 'h'])
+        # Remove duplicate points based on E and N
+        df = df.drop_duplicates(subset=['E', 'N'])
+        return df
+
+    reference_df = preprocess(reference_df)
+    raw_D_df = preprocess(raw_D_df)
+    cleaned_df = preprocess(cleaned_df)
+
+    # Define grid parameters based on the extent of the cleaned data
+    grid_size = 10  # Adjust grid size as needed (in the same units as E and N)
     xmin, xmax = cleaned_df['E'].min(), cleaned_df['E'].max()
     ymin, ymax = cleaned_df['N'].min(), cleaned_df['N'].max()
+    x_edges = np.arange(xmin, xmax + grid_size, grid_size)
+    y_edges = np.arange(ymin, ymax + grid_size, grid_size)
+    logger.info(f"Generated grid with cell size {grid_size} units.")
 
-    # Let's generate N random points within this extent
-    N_points = 10000  # Adjust as needed for resolution
-    x_random = np.random.uniform(xmin, xmax, N_points)
-    y_random = np.random.uniform(ymin, ymax, N_points)
+    # Function to compute mean heights within each grid cell
+    def compute_grid_means(df, x_edges, y_edges):
+        # Assign grid cell indices to each point
+        df['x_bin'] = np.digitize(df['E'], x_edges) - 1
+        df['y_bin'] = np.digitize(df['N'], y_edges) - 1
+        # Group by grid cells and compute mean height
+        grid_mean = df.groupby(['x_bin', 'y_bin'], as_index=False)['h'].mean()
+        return grid_mean
 
-    logger.info(f"Generated {N_points} random grid points within the extent of the cleaned data.")
+    # Compute mean heights for each dataset
+    reference_grid = compute_grid_means(reference_df, x_edges, y_edges)
+    raw_D_grid = compute_grid_means(raw_D_df, x_edges, y_edges)
+    cleaned_grid = compute_grid_means(cleaned_df, x_edges, y_edges)
 
-    # Now we need to interpolate z values at these (x_random, y_random) points from each dataset
-    # First, prepare the interpolation for reference data
-    reference_points = np.vstack((reference_df['E'], reference_df['N'])).T
-    reference_z = reference_df['h']
+    # Merge datasets on grid cells to compare heights
+    df_ref_raw_D = pd.merge(reference_grid, raw_D_grid, on=['x_bin', 'y_bin'], suffixes=('_ref', '_raw_D'))
+    df_ref_cleaned = pd.merge(reference_grid, cleaned_grid, on=['x_bin', 'y_bin'], suffixes=('_ref', '_cleaned'))
 
-    # Similarly for raw_D and cleaned data
-    raw_D_points = np.vstack((raw_D_df['E'], raw_D_df['N'])).T
-    raw_D_z = raw_D_df['h']
+    # Compute height differences
+    df_ref_raw_D['diff'] = df_ref_raw_D['h_ref'] - df_ref_raw_D['h_raw_D']
+    df_ref_cleaned['diff'] = df_ref_cleaned['h_ref'] - df_ref_cleaned['h_cleaned']
 
-    cleaned_points = np.vstack((cleaned_df['E'], cleaned_df['N'])).T
-    cleaned_z = cleaned_df['h']
+    # Calculate grid cell centers for plotting
+    df_ref_raw_D['x_center'] = x_edges[df_ref_raw_D['x_bin']] + grid_size / 2
+    df_ref_raw_D['y_center'] = y_edges[df_ref_raw_D['y_bin']] + grid_size / 2
 
-    logger.info("Prepared data points for interpolation.")
+    df_ref_cleaned['x_center'] = x_edges[df_ref_cleaned['x_bin']] + grid_size / 2
+    df_ref_cleaned['y_center'] = y_edges[df_ref_cleaned['y_bin']] + grid_size / 2
 
-    # Use scipy's LinearNDInterpolator for TIN interpolation
-    # Create interpolators
-    reference_interp = LinearNDInterpolator(reference_points, reference_z)
-    raw_D_interp = LinearNDInterpolator(raw_D_points, raw_D_z)
-    cleaned_interp = LinearNDInterpolator(cleaned_points, cleaned_z)
+    logger.info("Computed differences and grid cell centers.")
 
-    logger.info("Created interpolators for each dataset.")
-
-    # Interpolate z values at the grid points
-    grid_points = np.vstack((x_random, y_random)).T
-    z_reference = reference_interp(grid_points)
-    z_raw_D = raw_D_interp(grid_points)
-    z_cleaned = cleaned_interp(grid_points)
-
-    logger.info("Interpolated z values at grid points.")
-
-    # Now calculate differences
-    valid_mask_ref_raw_D = np.isfinite(z_reference) & np.isfinite(z_raw_D)
-    diff_raw_D = np.full_like(z_reference, np.nan)
-    diff_raw_D[valid_mask_ref_raw_D] = z_reference[valid_mask_ref_raw_D] - z_raw_D[valid_mask_ref_raw_D]
-
-    valid_mask_ref_cleaned = np.isfinite(z_reference) & np.isfinite(z_cleaned)
-    diff_cleaned = np.full_like(z_reference, np.nan)
-    diff_cleaned[valid_mask_ref_cleaned] = z_reference[valid_mask_ref_cleaned] - z_cleaned[valid_mask_ref_cleaned]
-
-    logger.info("Calculated differences between reference and other datasets.")
-
-    # Now, let's visualize the differences
+    # Visualization
     plt.figure(figsize=(14, 7))
 
     plt.subplot(1, 2, 1)
-    sc1 = plt.scatter(x_random[valid_mask_ref_raw_D], y_random[valid_mask_ref_raw_D],
-                      c=diff_raw_D[valid_mask_ref_raw_D], s=1, cmap='viridis', marker='.')
+    sc1 = plt.scatter(df_ref_raw_D['x_center'], df_ref_raw_D['y_center'],
+                      c=df_ref_raw_D['diff'], s=10, cmap='viridis', marker='s')
     plt.colorbar(sc1, label='Height Difference (m)')
     plt.title('Difference between Reference and Raw_D Data')
     plt.xlabel('Easting (E)')
@@ -93,8 +92,8 @@ def main():
     plt.axis('equal')
 
     plt.subplot(1, 2, 2)
-    sc2 = plt.scatter(x_random[valid_mask_ref_cleaned], y_random[valid_mask_ref_cleaned],
-                      c=diff_cleaned[valid_mask_ref_cleaned], s=1, cmap='viridis', marker='.')
+    sc2 = plt.scatter(df_ref_cleaned['x_center'], df_ref_cleaned['y_center'],
+                      c=df_ref_cleaned['diff'], s=10, cmap='viridis', marker='s')
     plt.colorbar(sc2, label='Height Difference (m)')
     plt.title('Difference between Reference and Cleaned Data')
     plt.xlabel('Easting (E)')
@@ -105,6 +104,7 @@ def main():
     plt.show()
 
     logger.info("Visualization complete.")
+
 
 if __name__ == "__main__":
     main()

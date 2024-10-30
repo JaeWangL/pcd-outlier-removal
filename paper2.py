@@ -2,7 +2,13 @@ import laspy
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import NearestNeighbors, LocalOutlierFactor
+from sklearn.preprocessing import StandardScaler
+from torch.utils.data import Dataset, DataLoader
 
 from loader.las_loader import LasLoader
 
@@ -16,9 +22,6 @@ def create_yz_pcd(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def statistical_outlier_removal_df(df: pd.DataFrame, k=20, z_max=2.0) -> pd.Series:
-    """
-    Applies Statistical Outlier Removal (SOR) to the input DataFrame.
-    """
     # Convert DataFrame to numpy array
     points = df.values
 
@@ -41,9 +44,6 @@ def statistical_outlier_removal_df(df: pd.DataFrame, k=20, z_max=2.0) -> pd.Seri
 
 
 def remove_outliers_lof(pcd: pd.DataFrame, contamination: float = 0.01, n_neighbors: int = 20) -> pd.Series:
-    """
-    Applies Local Outlier Factor to detect outliers in the point cloud data.
-    """
     lof = LocalOutlierFactor(n_neighbors=n_neighbors, contamination=contamination)
     y_pred = lof.fit_predict(pcd)
     mask = y_pred != -1  # Inliers are labeled as 1, outliers as -1
@@ -51,9 +51,6 @@ def remove_outliers_lof(pcd: pd.DataFrame, contamination: float = 0.01, n_neighb
 
 
 def visualize_points(original: pd.DataFrame, filtered: pd.DataFrame, title: str) -> None:
-    """
-    Visualizes the original and filtered point clouds with the same z-axis range.
-    """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
     # Determine column names
@@ -87,8 +84,48 @@ def visualize_points(original: pd.DataFrame, filtered: pd.DataFrame, title: str)
     plt.show()
 
 
+class AutoEncoder(nn.Module):
+    def __init__(self, input_dim=3, representation_dim=64):
+        super(AutoEncoder, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(128),
+            nn.Linear(128, 64),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(64),
+            nn.Linear(64, 32),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(32),
+            nn.Linear(32, 16),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(16),
+            nn.Linear(16, 8)
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(8, 16),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(16),
+            nn.Linear(16, 32),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(32),
+            nn.Linear(32, 64),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(64),
+            nn.Linear(64, 128),
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(128),
+            nn.Linear(128, input_dim)
+        )
+
+    def forward(self, x):
+        z = self.encoder(x)
+        x_reconstructed = self.decoder(z)
+        return x_reconstructed, z
+
+
 def main():
-    filename = "Seahawk_231015_223539_00_D.las"
+    filename = "Seahawk_231015_223008_00_D.las"
     loader = LasLoader(f"./__rawdata__/{filename}")
     df = loader.load_to_dataframe()
 
@@ -111,23 +148,15 @@ def main():
     # Combine masks
     inlier_mask = xz_mask & yz_mask
 
+
     df_filtered = df[inlier_mask]
-
-    # Apply LOF on the 3D points
-    pcd_3d = df_filtered[['E', 'N', 'h']]
-    lof_mask_3d = remove_outliers_lof(pcd_3d, contamination=0.01, n_neighbors=20)
-    df_final = df_filtered[lof_mask_3d]
-
     # Visualize the results
     # Visualize X-Z plane
     xz_original = xz_pcd
-    xz_filtered_final = create_xz_pcd(df_filtered)
-    visualize_points(xz_original, xz_filtered_final, 'X-Z Plane')
-
-    # Visualize Y-Z plane
     yz_original = yz_pcd
-    yz_filtered_final = create_yz_pcd(df_filtered)
-    visualize_points(yz_original, yz_filtered_final, 'Y-Z Plane')
+    visualize_points(xz_original, xz_original, 'X-Z ')
+
+    visualize_points(yz_original, yz_original, 'Y-Z')
 
 
 if __name__ == "__main__":

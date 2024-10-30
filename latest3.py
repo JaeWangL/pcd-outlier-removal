@@ -24,22 +24,17 @@ def create_yz_pcd(df: pd.DataFrame) -> pd.DataFrame:
 def statistical_outlier_removal_df(df: pd.DataFrame, k=20, z_max=2.0) -> pd.Series:
     # Convert DataFrame to numpy array
     points = df.values
-
     # Find the k nearest neighbors
     nbrs = NearestNeighbors(n_neighbors=k, algorithm='auto').fit(points)
     distances, _ = nbrs.kneighbors(points)
-
     # Exclude the first distance (distance to itself)
     mean_distances = np.mean(distances[:, 1:], axis=1)
-
     # Calculate the threshold
     global_mean = np.mean(mean_distances)
     global_std = np.std(mean_distances)
     threshold = global_mean + z_max * global_std
-
     # Filter points
     mask = mean_distances < threshold
-
     return pd.Series(mask, index=df.index)
 
 
@@ -52,11 +47,9 @@ def remove_outliers_lof(pcd: pd.DataFrame, contamination: float = 0.01, n_neighb
 
 def visualize_points(original: pd.DataFrame, filtered: pd.DataFrame, title: str) -> None:
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-
     # Determine column names
     x_col = original.columns[0]
     z_col = original.columns[1]
-
     # Determine the overall z-axis range
     z_min = min(original[z_col].min(), filtered[z_col].min())
     z_max = max(original[z_col].max(), filtered[z_col].max())
@@ -78,7 +71,6 @@ def visualize_points(original: pd.DataFrame, filtered: pd.DataFrame, title: str)
     # Add colorbars
     plt.colorbar(scatter1, ax=ax1, label=f'{z_col.upper()} value')
     plt.colorbar(scatter2, ax=ax2, label=f'{z_col.upper()} value')
-
     plt.suptitle(title)
     plt.tight_layout()
     plt.show()
@@ -90,31 +82,31 @@ class AutoEncoder(nn.Module):
         self.encoder = nn.Sequential(
             nn.Linear(input_dim, 128),
             nn.LeakyReLU(0.2),
-            nn.BatchNorm1d(128),
+            nn.LayerNorm(128),  # Change here
             nn.Linear(128, 64),
             nn.LeakyReLU(0.2),
-            nn.BatchNorm1d(64),
+            nn.LayerNorm(64),   # Change here
             nn.Linear(64, 32),
             nn.LeakyReLU(0.2),
-            nn.BatchNorm1d(32),
+            nn.LayerNorm(32),   # Change here
             nn.Linear(32, 16),
             nn.LeakyReLU(0.2),
-            nn.BatchNorm1d(16),
+            nn.LayerNorm(16),   # Change here
             nn.Linear(16, 8)
         )
         self.decoder = nn.Sequential(
             nn.Linear(8, 16),
             nn.LeakyReLU(0.2),
-            nn.BatchNorm1d(16),
+            nn.LayerNorm(16),   # Change here
             nn.Linear(16, 32),
             nn.LeakyReLU(0.2),
-            nn.BatchNorm1d(32),
+            nn.LayerNorm(32),   # Change here
             nn.Linear(32, 64),
             nn.LeakyReLU(0.2),
-            nn.BatchNorm1d(64),
+            nn.LayerNorm(64),   # Change here
             nn.Linear(64, 128),
             nn.LeakyReLU(0.2),
-            nn.BatchNorm1d(128),
+            nn.LayerNorm(128),  # Change here
             nn.Linear(128, input_dim)
         )
 
@@ -124,61 +116,26 @@ class AutoEncoder(nn.Module):
         return x_reconstructed, z
 
 
-def main():
-    filename = "Seahawk_231015_225544_00_D.las"
-    loader = LasLoader(f"./__rawdata__/{filename}")
-    df = loader.load_to_dataframe()
+class PointCloudDataset(Dataset):
+    def __init__(self, dataframe):
+        self.data = dataframe.values.astype(np.float32)
+        self.indices = dataframe.index.values
 
-    # Process X-Z plane
-    xz_pcd = create_xz_pcd(df)
-    xz_mask_sor = statistical_outlier_removal_df(xz_pcd, k=20, z_max=2.0)
-    xz_pcd_sor = xz_pcd[xz_mask_sor]
-    xz_mask_lof = remove_outliers_lof(xz_pcd_sor, contamination=0.01, n_neighbors=20)
-    xz_mask = xz_mask_sor.copy()
-    xz_mask[xz_mask_sor] = xz_mask_lof
+    def __len__(self):
+        return len(self.data)
 
-    # Process Y-Z plane
-    yz_pcd = create_yz_pcd(df)
-    yz_mask_sor = statistical_outlier_removal_df(yz_pcd, k=20, z_max=2.0)
-    yz_pcd_sor = yz_pcd[yz_mask_sor]
-    yz_mask_lof = remove_outliers_lof(yz_pcd_sor, contamination=0.01, n_neighbors=20)
-    yz_mask = yz_mask_sor.copy()
-    yz_mask[yz_mask_sor] = yz_mask_lof
+    def __getitem__(self, idx):
+        sample = self.data[idx]
+        return torch.from_numpy(sample)
 
-    # Combine masks
-    inlier_mask = xz_mask & yz_mask
 
-    df_filtered = df[inlier_mask]
-
-    # Apply LOF on the 3D points
-    # pcd_3d = df_filtered[['E', 'N', 'h']]
-    # lof_mask_3d = remove_outliers_lof(pcd_3d, contamination=0.01, n_neighbors=20)
-    # df_filtered = df_filtered[lof_mask_3d]
-
-    # Now apply SRR after LOF
-    print("Applying SRR after LOF...")
-
-    # Prepare dataset for SRR
-    class PointCloudDataset(Dataset):
-        def __init__(self, dataframe):
-            self.data = dataframe[['E', 'N', 'h']].values.astype(np.float32)
-            self.indices = dataframe.index.values
-
-        def __len__(self):
-            return len(self.data)
-
-        def __getitem__(self, idx):
-            sample = self.data[idx]
-            return torch.from_numpy(sample)
-
-    dataset = PointCloudDataset(df_filtered)
-
+def run_srr_on_dataset(dataset, input_dim=2):
     # Device configuration
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
     print(f"Using device: {device}")
 
     # SRR Parameters
-    batch_size = 256
+    batch_size = 512
     representation_dim = 32  # Reduced dimensionality
     num_occ_estimators = 3  # Reduced number of estimators
     refinement_iterations = 3  # Reduced iterations
@@ -186,7 +143,7 @@ def main():
     num_epochs = 10  # Reduced epochs
 
     # Initialize AutoEncoder
-    autoencoder = AutoEncoder(input_dim=3, representation_dim=representation_dim).to(device)
+    autoencoder = AutoEncoder(input_dim=input_dim, representation_dim=representation_dim).to(device)
     optimizer = optim.Adam(autoencoder.parameters(), lr=0.001)
 
     # Initialize variables for SRR
@@ -215,7 +172,6 @@ def main():
         print("Data Refinement...")
         np.random.shuffle(refined_indices)
         subsets = np.array_split(refined_indices, num_occ_estimators)
-
         for i, subset_indices in enumerate(subsets):
             # Extract features from subset
             subset_features = full_features[subset_indices]
@@ -227,11 +183,7 @@ def main():
 
             # Train OCC - Use IsolationForest
             occ = IsolationForest(
-                n_estimators=100,
-                max_samples='auto',
-                contamination='auto',
-                random_state=42,
-                n_jobs=-1
+                n_estimators=100, max_samples='auto', contamination='auto', random_state=42, n_jobs=-1
             ).fit(subset_features_scaled)
 
             # Predict on all data
@@ -255,11 +207,9 @@ def main():
                 data = data.float().to(device)
                 reconstructed, _ = autoencoder(data)
                 loss = nn.MSELoss()(reconstructed, data)
-
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-
                 epoch_loss += loss.item()
             epoch_loss /= len(refined_loader)
             epoch_losses.append(epoch_loss)
@@ -275,7 +225,6 @@ def main():
     print("Training Final OCC...")
     refined_dataset = torch.utils.data.Subset(dataset, refined_indices)
     refined_loader = DataLoader(refined_dataset, batch_size=batch_size, shuffle=False)
-
     features = []
     with torch.no_grad():
         for data in refined_loader:
@@ -302,19 +251,59 @@ def main():
             features.append(feature)
     features = np.concatenate(features, axis=0)
     features = scaler.transform(features)
-
     anomaly_labels = final_occ.predict(features)
     # -1 indicates anomalies, 1 indicates normal
     anomaly_mask = anomaly_labels == -1  # anomalies
     normal_mask = anomaly_labels == 1  # normal data
 
-    # Get indices in df_filtered
-    df_filtered_indices = dataset.indices
-    anomaly_indices_in_df_filtered = df_filtered_indices[anomaly_mask]
-    normal_indices_in_df_filtered = df_filtered_indices[normal_mask]
+    # Get indices in the original dataframe
+    indices = dataset.indices
+    normal_indices_in_df = indices[normal_mask]
 
-    # Update df_final
-    df_srr_filtered = df_filtered.loc[normal_indices_in_df_filtered]
+    return normal_indices_in_df
+
+
+def main():
+    filename = "Seahawk_231015_223539_00_D.las"
+    loader = LasLoader(f"./__rawdata__/{filename}")
+    df = loader.load_to_dataframe()
+
+    # Process X-Z plane
+    xz_pcd = create_xz_pcd(df)
+    xz_mask_sor = statistical_outlier_removal_df(xz_pcd, k=20, z_max=2.0)
+    xz_pcd_sor = xz_pcd[xz_mask_sor]
+    xz_mask_lof = remove_outliers_lof(xz_pcd_sor, contamination=0.01, n_neighbors=20)
+    xz_mask = xz_mask_sor.copy()
+    xz_mask[xz_mask_sor] = xz_mask_lof
+
+    # Process Y-Z plane
+    yz_pcd = create_yz_pcd(df)
+    yz_mask_sor = statistical_outlier_removal_df(yz_pcd, k=20, z_max=2.0)
+    yz_pcd_sor = yz_pcd[yz_mask_sor]
+    yz_mask_lof = remove_outliers_lof(yz_pcd_sor, contamination=0.01, n_neighbors=20)
+    yz_mask = yz_mask_sor.copy()
+    yz_mask[yz_mask_sor] = yz_mask_lof
+
+    # Combine masks
+    inlier_mask = xz_mask & yz_mask
+
+    # Now apply SRR on the XZ plane
+    print("Applying SRR on XZ plane...")
+    xz_pcd_filtered = xz_pcd[inlier_mask]
+    xz_dataset = PointCloudDataset(xz_pcd_filtered)
+    xz_normal_indices = run_srr_on_dataset(xz_dataset, input_dim=2)
+
+    # Now apply SRR on the YZ plane
+    print("Applying SRR on YZ plane...")
+    yz_pcd_filtered = yz_pcd[inlier_mask]
+    yz_dataset = PointCloudDataset(yz_pcd_filtered)
+    yz_normal_indices = run_srr_on_dataset(yz_dataset, input_dim=2)
+
+    # Combine indices via intersection
+    final_indices = np.intersect1d(xz_normal_indices, yz_normal_indices)
+
+    # Get the filtered DataFrame from the indices
+    df_srr_filtered = df.loc[final_indices]
 
     # Visualize the results
     # Visualize X-Z plane
@@ -326,24 +315,6 @@ def main():
     yz_original = yz_pcd
     yz_filtered_final = create_yz_pcd(df_srr_filtered)
     visualize_points(yz_original, yz_filtered_final, 'Y-Z Plane after SRR')
-
-    # Write the filtered data to a LAS file
-    output_file = f"__cleaneddata__/clean_{filename}"
-    header = laspy.LasHeader(point_format=3, version="1.2")
-    header.add_extra_dim(laspy.ExtraBytesParams(name="GCP_id", type=np.uint32))
-    header.scales = [0.01, 0.01, 0.01]
-
-    # Create LasData with the header
-    las = laspy.LasData(header)
-
-    # Set the coordinates
-    las.x = df_srr_filtered['E'].values
-    las.y = df_srr_filtered['N'].values
-    las.z = df_srr_filtered['h'].values
-
-    # Write the LAS file
-    las.write(output_file)
-    print(f"Filtered point cloud saved to {output_file}")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    las_dir = '../__rawdata__'
+    las_dir = '../test'
     las_files = glob.glob(os.path.join(las_dir, '*_D.las'))
 
     if not las_files:

@@ -114,11 +114,11 @@ class PointCloudDataset(Dataset):
         return torch.from_numpy(sample)
 
 def run_srr_on_dataset(dataset, input_dim=3):
-    # Device configuration
+    # 디바이스 설정
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
-    # SRR Parameters
+    # SRR 파라미터 설정
     batch_size = 1024
     representation_dim = 32
     num_occ_estimators = 5
@@ -126,18 +126,28 @@ def run_srr_on_dataset(dataset, input_dim=3):
     convergence_threshold = 0.0001
     num_epochs = 30
 
-    # Initialize AutoEncoder
+    # AutoEncoder 초기화
     autoencoder = AutoEncoder(input_dim=input_dim, representation_dim=representation_dim).to(device)
     optimizer = optim.Adam(autoencoder.parameters(), lr=0.001)
 
-    # Initialize variables for SRR
+    # SRR을 위한 변수 초기화
     refined_indices = np.arange(len(dataset))
     prev_loss = float('inf')
+
+    # 전체 데이터의 범위 계산 (시각화를 위한 축 범위 고정)
+    data_array = dataset.data
+    data_array_original = dataset.scaler.inverse_transform(data_array)
+    x_min, x_max = np.min(data_array_original[:, 0]), np.max(data_array_original[:, 0])
+    y_min, y_max = np.min(data_array_original[:, 1]), np.max(data_array_original[:, 1])
+    z_min, z_max = np.min(data_array_original[:, 2]), np.max(data_array_original[:, 2])
+
+    # 초기 데이터 시각화
+    visualize_initial_data(dataset, x_min, x_max, y_min, y_max, z_min, z_max)
 
     for iteration in range(refinement_iterations):
         print(f"SRR Iteration {iteration + 1}/{refinement_iterations}")
 
-        # Precompute features for the full dataset
+        # 전체 데이터셋에 대한 특징 추출
         print("Extracting features for the full dataset...")
         full_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
         full_features = []
@@ -149,23 +159,24 @@ def run_srr_on_dataset(dataset, input_dim=3):
                 full_features.append(feature)
         full_features = np.concatenate(full_features, axis=0)
 
-        # Initialize occ_predictions array
+        # OCC 예측 배열 초기화
         occ_predictions = np.zeros((len(dataset), num_occ_estimators))
 
-        # Data Refinement
+        # 데이터 정제
         print("Data Refinement...")
         np.random.shuffle(refined_indices)
         subsets = np.array_split(refined_indices, num_occ_estimators)
+
         for i, subset_indices in enumerate(subsets):
-            # Extract features from subset
+            # 부분집합에서 특징 추출
             subset_features = full_features[subset_indices]
 
-            # Normalize features
+            # 특징 정규화
             scaler = StandardScaler()
             subset_features_scaled = scaler.fit_transform(subset_features)
             full_features_scaled = scaler.transform(full_features)
 
-            # Train OCC - Use IsolationForest
+            # Isolation Forest 학습 및 예측
             occ = IsolationForest(
                 n_estimators=100,
                 max_samples='auto',
@@ -174,20 +185,28 @@ def run_srr_on_dataset(dataset, input_dim=3):
                 n_jobs=-1
             ).fit(subset_features_scaled)
 
-            # Predict on all data
+            # 전체 데이터에 대한 예측
             preds = occ.predict(full_features_scaled)
             occ_predictions[:, i] = preds
 
-        # Consensus (Majority Voting)
+        # 다수결 합의를 통한 인라이어 결정
         consensus = np.sum(occ_predictions == 1, axis=1) >= (num_occ_estimators // 2 + 1)
         refined_indices = np.where(consensus)[0]
         print(f"Refined dataset size: {len(refined_indices)}")
 
-        # Update representation learner
+        # 정상치와 이상치 마스크 생성
+        normal_mask = np.zeros(len(dataset), dtype=bool)
+        normal_mask[refined_indices] = True
+        anomaly_mask = ~normal_mask
+
+        # 현재 iteration의 데이터 시각화
+        visualize_iteration(dataset, iteration, normal_mask, anomaly_mask, x_min, x_max, y_min, y_max, z_min, z_max)
+
+        # 표현 학습기 업데이트
         refined_dataset = torch.utils.data.Subset(dataset, refined_indices)
         refined_loader = DataLoader(refined_dataset, batch_size=batch_size, shuffle=True)
 
-        # Self-supervised training (Autoencoder)
+        # 자기 지도 학습 (AutoEncoder)
         epoch_losses = []
         for epoch in range(num_epochs):
             epoch_loss = 0.0
@@ -203,13 +222,13 @@ def run_srr_on_dataset(dataset, input_dim=3):
             epoch_losses.append(epoch_loss)
             print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss:.6f}")
 
-        # Check for convergence
-        if abs(prev_loss - epoch_loss) < convergence_threshold:
-            print("Convergence achieved.")
-            break
-        prev_loss = epoch_loss
+            # 수렴 확인
+            if abs(prev_loss - epoch_loss) < convergence_threshold:
+                print("Convergence achieved.")
+                break
+            prev_loss = epoch_loss
 
-    # Training Final OCC
+    # 최종 OCC 학습
     print("Training Final OCC...")
     refined_dataset = torch.utils.data.Subset(dataset, refined_indices)
     refined_loader = DataLoader(refined_dataset, batch_size=batch_size, shuffle=False)
@@ -224,11 +243,11 @@ def run_srr_on_dataset(dataset, input_dim=3):
     scaler = StandardScaler()
     features = scaler.fit_transform(features)
 
-    # Train final OCC (Isolation Forest)
+    # 최종 Isolation Forest 학습
     final_occ = IsolationForest(contamination=0.01, random_state=42, n_jobs=-1)
     final_occ.fit(features)
 
-    # Compute anomaly scores on the data
+    # 전체 데이터셋에 대한 이상치 점수 계산
     full_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
     features = []
     with torch.no_grad():
@@ -239,15 +258,88 @@ def run_srr_on_dataset(dataset, input_dim=3):
             features.append(feature)
     features = np.concatenate(features, axis=0)
     features = scaler.transform(features)
-    anomaly_labels = final_occ.predict(features)
-    # -1 indicates anomalies, 1 indicates normal
-    anomaly_mask = anomaly_labels == -1  # anomalies
-    normal_mask = anomaly_labels == 1  # normal data
+    anomaly_labels = final_occ.predict(features)  # -1은 이상치, 1은 정상
+    anomaly_mask = anomaly_labels == -1  # 이상치 마스크
+    normal_mask = anomaly_labels == 1    # 정상 데이터 마스크
 
-    # Get indices in the original dataframe
+    # 최종 결과 시각화
+    visualize_final_results(dataset, normal_mask, anomaly_mask, x_min, x_max, y_min, y_max, z_min, z_max)
+
+    # 원본 데이터프레임에서의 인덱스 얻기
     indices = dataset.indices
     normal_indices_in_df = indices[normal_mask]
+
     return normal_indices_in_df
+
+def visualize_initial_data(dataset, x_min, x_max, y_min, y_max, z_min, z_max):
+    data_array = dataset.data
+    data_array_original = dataset.scaler.inverse_transform(data_array)
+
+    fig = plt.figure(figsize=(12, 10))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(data_array_original[:, 0], data_array_original[:, 1], data_array_original[:, 2], c='gray', s=1)
+
+    ax.set_title('Initial Data')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_xlim([x_min, x_max])
+    ax.set_ylim([y_min, y_max])
+    ax.set_zlim([z_min, z_max])
+    plt.tight_layout()
+    plt.show()
+
+def visualize_iteration(dataset, iteration, normal_mask, anomaly_mask, x_min, x_max, y_min, y_max, z_min, z_max):
+    data_array = dataset.data
+    data_array_original = dataset.scaler.inverse_transform(data_array)
+
+    # 정상치와 이상치 분리
+    normal_data = data_array_original[normal_mask]
+    anomaly_data = data_array_original[anomaly_mask]
+
+    fig = plt.figure(figsize=(12, 10))
+    ax = fig.add_subplot(111, projection='3d')
+
+    ax.scatter(normal_data[:, 0], normal_data[:, 1], normal_data[:, 2], c='b', label='Normal', s=1)
+    ax.scatter(anomaly_data[:, 0], anomaly_data[:, 1], anomaly_data[:, 2], c='r', label='Outlier', s=1)
+
+    ax.set_title(f'Iteration {iteration + 1}')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.legend()
+    ax.set_xlim([x_min, x_max])
+    ax.set_ylim([y_min, y_max])
+    ax.set_zlim([z_min, z_max])
+    ax.view_init(elev=20, azim=-60)  # 시각화 각도 고정
+    plt.tight_layout()
+    plt.show()
+
+def visualize_final_results(dataset, normal_mask, anomaly_mask, x_min, x_max, y_min, y_max, z_min, z_max):
+    data_array = dataset.data
+    data_array_original = dataset.scaler.inverse_transform(data_array)
+
+    # 정상치와 이상치 분리
+    normal_data = data_array_original[normal_mask]
+    anomaly_data = data_array_original[anomaly_mask]
+
+    fig = plt.figure(figsize=(12, 10))
+    ax = fig.add_subplot(111, projection='3d')
+
+    ax.scatter(normal_data[:, 0], normal_data[:, 1], normal_data[:, 2], c='b', label='Normal', s=1)
+    ax.scatter(anomaly_data[:, 0], anomaly_data[:, 1], anomaly_data[:, 2], c='r', label='Outlier', s=1)
+
+    ax.set_title('Final Results')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.legend()
+    ax.set_xlim([x_min, x_max])
+    ax.set_ylim([y_min, y_max])
+    ax.set_zlim([z_min, z_max])
+    ax.view_init(elev=20, azim=-60)  # 시각화 각도 고정
+    plt.tight_layout()
+    plt.show()
 
 def main():
     filename = "Seahawk_231015_223539_00_D.las"
